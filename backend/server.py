@@ -621,5 +621,5 @@ async def startup_event():
 async def shutdown_db_client():
     client.close()
 
-# Export the socket_app for uvicorn
-app = socket_app
+# Export the combined app for uvicorn
+app = sio_asgi
