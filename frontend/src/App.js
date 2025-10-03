@@ -45,9 +45,11 @@ function LoveRoyaleMultiplayer() {
   useEffect(() => {
     const backendUrl = process.env.REACT_APP_BACKEND_URL;
     socketRef.current = io(backendUrl, {
+      path: '/socket.io',
       transports: ['polling', 'websocket'],
       timeout: 20000,
-      forceNew: true
+      forceNew: true,
+      autoConnect: true
     });
 
     const socket = socketRef.current;
