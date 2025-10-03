@@ -594,9 +594,8 @@ async def get_active_rooms():
 # Include the router in the main app
 app.include_router(api_router)
 
-# Mount SocketIO
+# Mount SocketIO - Create combined app
 socket_app = socketio.ASGIApp(sio, app)
-app.mount("/socket.io", socket_app)
 
 app.add_middleware(
     CORSMiddleware,
