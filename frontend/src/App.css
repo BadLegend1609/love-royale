@@ -1,34 +1,150 @@
-.App-logo {
-    height: 40vmin;
-    pointer-events: none;
+.love-royale-game {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  min-height: 100vh;
+  background: linear-gradient(135deg, #ff9a9e 0%, #fecfef 100%);
+  font-family: 'Arial', sans-serif;
+  padding: 20px;
 }
 
-@media (prefers-reduced-motion: no-preference) {
-    .App-logo {
-        animation: App-logo-spin infinite 20s linear;
-    }
+.game-header {
+  text-align: center;
+  margin-bottom: 20px;
 }
 
-.App-header {
-    background-color: #0f0f10;
-    min-height: 100vh;
-    display: flex;
+.game-title {
+  font-size: 3rem;
+  color: #d63384;
+  margin: 0;
+  text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.3);
+  font-weight: bold;
+}
+
+.game-subtitle {
+  font-size: 1.2rem;
+  color: #6f42c1;
+  margin: 5px 0 0 0;
+  font-style: italic;
+}
+
+.game-container {
+  display: flex;
+  gap: 20px;
+  align-items: flex-start;
+  flex-wrap: wrap;
+  justify-content: center;
+}
+
+.game-canvas {
+  border: 4px solid #d63384;
+  border-radius: 15px;
+  box-shadow: 0 8px 25px rgba(0, 0, 0, 0.3);
+  background: #ffeef8;
+  cursor: crosshair;
+}
+
+.controls-info {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  min-width: 200px;
+}
+
+.player-controls {
+  background: rgba(255, 255, 255, 0.9);
+  padding: 15px;
+  border-radius: 10px;
+  box-shadow: 0 4px 15px rgba(0, 0, 0, 0.1);
+  border-left: 4px solid #d63384;
+}
+
+.player-controls h3 {
+  margin: 0 0 10px 0;
+  color: #d63384;
+  font-size: 1.1rem;
+}
+
+.player-controls p {
+  margin: 5px 0;
+  color: #333;
+  font-size: 0.9rem;
+}
+
+.game-info {
+  text-align: center;
+  margin-top: 20px;
+  background: rgba(255, 255, 255, 0.9);
+  padding: 15px 25px;
+  border-radius: 20px;
+  box-shadow: 0 4px 15px rgba(0, 0, 0, 0.1);
+}
+
+.game-info p {
+  margin: 5px 0;
+  color: #d63384;
+  font-weight: bold;
+  font-size: 1rem;
+}
+
+/* Responsive Design */
+@media (max-width: 1024px) {
+  .game-container {
     flex-direction: column;
     align-items: center;
+  }
+  
+  .controls-info {
+    flex-direction: row;
     justify-content: center;
-    font-size: calc(10px + 2vmin);
-    color: white;
+  }
 }
 
-.App-link {
-    color: #61dafb;
+@media (max-width: 768px) {
+  .game-title {
+    font-size: 2rem;
+  }
+  
+  .game-canvas {
+    width: 90vw;
+    height: auto;
+  }
+  
+  .controls-info {
+    flex-direction: column;
+    width: 90vw;
+  }
+  
+  .player-controls {
+    text-align: center;
+  }
 }
 
-@keyframes App-logo-spin {
-    from {
-        transform: rotate(0deg);
-    }
-    to {
-        transform: rotate(360deg);
-    }
+/* Animation for health bars and UI elements */
+.player-controls {
+  transition: transform 0.3s ease;
+}
+
+.player-controls:hover {
+  transform: translateY(-2px);
+}
+
+/* Heart animations */
+@keyframes heartbeat {
+  0%, 100% { transform: scale(1); }
+  50% { transform: scale(1.1); }
+}
+
+.game-title {
+  animation: heartbeat 2s ease-in-out infinite;
+}
+
+/* Cursor styles */
+body {
+  margin: 0;
+  font-family: 'Arial', sans-serif;
+}
+
+* {
+  box-sizing: border-box;
 }
