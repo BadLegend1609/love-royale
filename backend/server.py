@@ -31,7 +31,8 @@ app = FastAPI(title="Love Royale API", description="Multiplayer tactical romance
 sio = socketio.AsyncServer(
     cors_allowed_origins="*",
     logger=True,
-    engineio_logger=True
+    engineio_logger=False,
+    async_mode='asgi'
 )
 
 # Game state management
