@@ -1,4 +1,5 @@
-import React, { useEffect, useRef, useState, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
+import io from 'socket.io-client';
 import './App.css';
 
 // Game Constants
@@ -8,337 +9,228 @@ const PLAYER_SIZE = 20;
 const BULLET_SIZE = 4;
 const BULLET_SPEED = 8;
 const PLAYER_SPEED = 3;
-const PLAYER_MAX_HEALTH = 100;
-const ROUNDS_TO_WIN = 3;
 
-// Game State
-let gameState = {
-  players: {
-    player1: {
-      x: 100,
-      y: 100,
-      health: PLAYER_MAX_HEALTH,
-      angle: 0,
-      color: '#ff69b4', // Hot Pink for Player 1
-      wins: 0,
-      alive: true
-    },
-    player2: {
-      x: 700,
-      y: 500,
-      health: PLAYER_MAX_HEALTH,
-      angle: 0,
-      color: '#ff1493', // Deep Pink for Player 2
-      wins: 0,
-      alive: true
-    }
-  },
-  bullets: [],
-  gamePhase: 'PLAYING', // 'PLAYING', 'ROUND_END', 'GAME_END'
-  currentRound: 1,
-  winner: null
-};
+// Mobile detection
+const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
 
-// Input State
-let keys = {};
-let mousePos = { x: 0, y: 0 };
-
-// Map obstacles (simple rectangles for now)
-const MAP_OBSTACLES = [
-  { x: 200, y: 150, width: 100, height: 20 },
-  { x: 500, y: 300, width: 20, height: 100 },
-  { x: 350, y: 450, width: 150, height: 20 },
-  { x: 100, y: 350, width: 80, height: 20 },
-  { x: 600, y: 100, width: 20, height: 80 }
-];
-
-function LoveRoyaleGame() {
+function LoveRoyaleMultiplayer() {
   const canvasRef = useRef(null);
   const animationRef = useRef(null);
-  const [gameStats, setGameStats] = useState({
-    player1Wins: 0,
-    player2Wins: 0,
-    currentRound: 1,
-    gamePhase: 'PLAYING'
+  const socketRef = useRef(null);
+  const [gameState, setGameState] = useState({
+    screen: 'menu', // 'menu', 'lobby', 'playing'
+    roomCode: '',
+    playerName: '',
+    roomData: null,
+    mapConfig: null,
+    connected: false,
+    error: null
+  });
+  
+  // Mobile controls state
+  const [mobileControls, setMobileControls] = useState({
+    joystick: { active: false, x: 0, y: 0, startX: 0, startY: 0 },
+    fireButton: { pressed: false }
+  });
+  
+  // Game rendering state
+  const [renderData, setRenderData] = useState({
+    players: [],
+    enemies: [],
+    bullets: [],
+    wave: 1
   });
 
-  // Collision detection
-  const checkCollision = (rect1, rect2) => {
-    return rect1.x < rect2.x + rect2.width &&
-           rect1.x + rect1.width > rect2.x &&
-           rect1.y < rect2.y + rect2.height &&
-           rect1.y + rect1.height > rect2.y;
-  };
+  // Socket connection
+  useEffect(() => {
+    const backendUrl = process.env.REACT_APP_BACKEND_URL;
+    socketRef.current = io(backendUrl, {
+      transports: ['websocket', 'polling']
+    });
 
-  // Check if position collides with map obstacles
-  const checkMapCollision = (x, y, size) => {
-    const playerRect = { x: x - size/2, y: y - size/2, width: size, height: size };
-    return MAP_OBSTACLES.some(obstacle => checkCollision(playerRect, obstacle));
-  };
+    const socket = socketRef.current;
 
-  // Update player position with collision detection
-  const updatePlayerPosition = (player, newX, newY) => {
-    // Check boundaries
-    if (newX < PLAYER_SIZE/2 || newX > CANVAS_WIDTH - PLAYER_SIZE/2) return;
-    if (newY < PLAYER_SIZE/2 || newY > CANVAS_HEIGHT - PLAYER_SIZE/2) return;
-    
-    // Check map collision
-    if (checkMapCollision(newX, newY, PLAYER_SIZE)) return;
-    
-    player.x = newX;
-    player.y = newY;
-  };
+    socket.on('connect', () => {
+      console.log('Connected to server');
+      setGameState(prev => ({ ...prev, connected: true, error: null }));
+    });
 
-  // Handle input
-  const handleInput = () => {
-    const player1 = gameState.players.player1;
-    const player2 = gameState.players.player2;
+    socket.on('disconnect', () => {
+      console.log('Disconnected from server');
+      setGameState(prev => ({ ...prev, connected: false }));
+    });
 
-    // Player 1 controls (WASD)
-    if (keys['w'] || keys['W']) updatePlayerPosition(player1, player1.x, player1.y - PLAYER_SPEED);
-    if (keys['s'] || keys['S']) updatePlayerPosition(player1, player1.x, player1.y + PLAYER_SPEED);
-    if (keys['a'] || keys['A']) updatePlayerPosition(player1, player1.x - PLAYER_SPEED, player1.y);
-    if (keys['d'] || keys['D']) updatePlayerPosition(player1, player1.x + PLAYER_SPEED, player1.y);
+    socket.on('error', (data) => {
+      setGameState(prev => ({ ...prev, error: data.message }));
+    });
 
-    // Player 2 controls (Arrow Keys)
-    if (keys['ArrowUp']) updatePlayerPosition(player2, player2.x, player2.y - PLAYER_SPEED);
-    if (keys['ArrowDown']) updatePlayerPosition(player2, player2.x, player2.y + PLAYER_SPEED);
-    if (keys['ArrowLeft']) updatePlayerPosition(player2, player2.x - PLAYER_SPEED, player2.y);
-    if (keys['ArrowRight']) updatePlayerPosition(player2, player2.x + PLAYER_SPEED, player2.y);
-  };
+    socket.on('room_created', (data) => {
+      setGameState(prev => ({
+        ...prev,
+        screen: 'lobby',
+        roomCode: data.room_code,
+        roomData: data.room_data,
+        mapConfig: data.map_config,
+        error: null
+      }));
+    });
 
-  // Shoot bullet
-  const shootBullet = (player, targetX, targetY) => {
-    if (gameState.gamePhase !== 'PLAYING') return;
-    
-    const dx = targetX - player.x;
-    const dy = targetY - player.y;
+    socket.on('player_joined', (data) => {
+      setGameState(prev => ({
+        ...prev,
+        roomData: data.room_data,
+        mapConfig: data.map_config
+      }));
+    });
+
+    socket.on('player_left', (data) => {
+      setGameState(prev => ({
+        ...prev,
+        roomData: prev.roomData ? {
+          ...prev.roomData,
+          players: data.players
+        } : null
+      }));
+    });
+
+    socket.on('game_started', (data) => {
+      setGameState(prev => ({
+        ...prev,
+        screen: 'playing',
+        roomData: data.room_data
+      }));
+      setRenderData({
+        players: data.room_data.players,
+        enemies: data.room_data.enemies,
+        bullets: [],
+        wave: data.wave
+      });
+    });
+
+    socket.on('game_update', (data) => {
+      setRenderData({
+        players: data.players,
+        enemies: data.enemies,
+        bullets: data.bullets,
+        wave: data.wave
+      });
+    });
+
+    socket.on('player_moved', (data) => {
+      setRenderData(prev => ({
+        ...prev,
+        players: prev.players.map(p => 
+          p.id === data.player_id 
+            ? { ...p, x: data.x, y: data.y }
+            : p
+        )
+      }));
+    });
+
+    socket.on('bullet_fired', (data) => {
+      setRenderData(prev => ({
+        ...prev,
+        bullets: [...prev.bullets, data.bullet]
+      }));
+    });
+
+    socket.on('wave_complete', (data) => {
+      setRenderData(prev => ({
+        ...prev,
+        wave: data.wave,
+        enemies: data.enemies
+      }));
+    });
+
+    socket.on('game_complete', (data) => {
+      alert('Congratulations! You completed all waves! 💕');
+      setGameState(prev => ({ ...prev, screen: 'lobby' }));
+    });
+
+    return () => {
+      socket.disconnect();
+    };
+  }, []);
+
+  // Player movement
+  const movePlayer = useCallback((dx, dy) => {
+    if (!socketRef.current || gameState.screen !== 'playing') return;
+
+    const myPlayer = renderData.players.find(p => p.id === socketRef.current.id);
+    if (!myPlayer || !myPlayer.alive) return;
+
+    const newX = Math.max(PLAYER_SIZE/2, Math.min(CANVAS_WIDTH - PLAYER_SIZE/2, myPlayer.x + dx * PLAYER_SPEED));
+    const newY = Math.max(PLAYER_SIZE/2, Math.min(CANVAS_HEIGHT - PLAYER_SIZE/2, myPlayer.y + dy * PLAYER_SPEED));
+
+    // Check collision with obstacles
+    if (gameState.mapConfig) {
+      const playerRect = { x: newX - PLAYER_SIZE/2, y: newY - PLAYER_SIZE/2, width: PLAYER_SIZE, height: PLAYER_SIZE };
+      const collision = gameState.mapConfig.obstacles.some(obstacle => 
+        playerRect.x < obstacle.x + obstacle.width &&
+        playerRect.x + playerRect.width > obstacle.x &&
+        playerRect.y < obstacle.y + obstacle.height &&
+        playerRect.y + playerRect.height > obstacle.y
+      );
+      
+      if (collision) return;
+    }
+
+    socketRef.current.emit('player_move', { x: newX, y: newY });
+
+    // Update local state immediately for smooth movement
+    setRenderData(prev => ({
+      ...prev,
+      players: prev.players.map(p => 
+        p.id === socketRef.current.id ? { ...p, x: newX, y: newY } : p
+      )
+    }));
+  }, [gameState.mapConfig, gameState.screen, renderData.players]);
+
+  // Player shooting
+  const shootBullet = useCallback((targetX, targetY) => {
+    if (!socketRef.current || gameState.screen !== 'playing') return;
+
+    const myPlayer = renderData.players.find(p => p.id === socketRef.current.id);
+    if (!myPlayer || !myPlayer.alive) return;
+
+    const dx = targetX - myPlayer.x;
+    const dy = targetY - myPlayer.y;
     const length = Math.sqrt(dx * dx + dy * dy);
     
     if (length === 0) return;
-    
-    const bullet = {
-      x: player.x,
-      y: player.y,
-      vx: (dx / length) * BULLET_SPEED,
-      vy: (dy / length) * BULLET_SPEED,
-      owner: player === gameState.players.player1 ? 'player1' : 'player2',
-      color: player.color
-    };
-    
-    gameState.bullets.push(bullet);
-  };
 
-  // Update bullets
-  const updateBullets = () => {
-    gameState.bullets = gameState.bullets.filter(bullet => {
-      bullet.x += bullet.vx;
-      bullet.y += bullet.vy;
-      
-      // Remove bullets that hit boundaries
-      if (bullet.x < 0 || bullet.x > CANVAS_WIDTH || bullet.y < 0 || bullet.y > CANVAS_HEIGHT) {
-        return false;
-      }
-      
-      // Check collision with map obstacles
-      if (checkMapCollision(bullet.x, bullet.y, BULLET_SIZE)) {
-        return false;
-      }
-      
-      // Check collision with players
-      Object.keys(gameState.players).forEach(playerKey => {
-        const player = gameState.players[playerKey];
-        if (bullet.owner !== playerKey && player.alive) {
-          const distance = Math.sqrt((bullet.x - player.x) ** 2 + (bullet.y - player.y) ** 2);
-          if (distance < PLAYER_SIZE / 2 + BULLET_SIZE / 2) {
-            player.health -= 25;
-            if (player.health <= 0) {
-              player.alive = false;
-              endRound(bullet.owner);
-            }
-            return false;
-          }
-        }
-      });
-      
-      return true;
-    });
-  };
+    const vx = (dx / length) * BULLET_SPEED;
+    const vy = (dy / length) * BULLET_SPEED;
 
-  // End round
-  const endRound = (winner) => {
-    if (gameState.gamePhase !== 'PLAYING') return;
-    
-    gameState.gamePhase = 'ROUND_END';
-    gameState.players[winner].wins++;
-    
-    // Check if game is won
-    if (gameState.players[winner].wins >= ROUNDS_TO_WIN) {
-      gameState.gamePhase = 'GAME_END';
-      gameState.winner = winner;
-    }
-    
-    // Auto-restart round after 2 seconds
-    setTimeout(() => {
-      if (gameState.gamePhase === 'ROUND_END') {
-        startNewRound();
-      }
-    }, 2000);
-  };
+    socketRef.current.emit('player_shoot', { vx, vy });
+  }, [gameState.screen, renderData.players]);
 
-  // Start new round
-  const startNewRound = () => {
-    if (gameState.gamePhase === 'GAME_END') return;
-    
-    gameState.currentRound++;
-    gameState.gamePhase = 'PLAYING';
-    gameState.bullets = [];
-    
-    // Reset player positions and health
-    gameState.players.player1.x = 100;
-    gameState.players.player1.y = 100;
-    gameState.players.player1.health = PLAYER_MAX_HEALTH;
-    gameState.players.player1.alive = true;
-    
-    gameState.players.player2.x = 700;
-    gameState.players.player2.y = 500;
-    gameState.players.player2.health = PLAYER_MAX_HEALTH;
-    gameState.players.player2.alive = true;
-  };
-
-  // Reset entire game
-  const resetGame = () => {
-    gameState.players.player1.wins = 0;
-    gameState.players.player2.wins = 0;
-    gameState.currentRound = 1;
-    gameState.gamePhase = 'PLAYING';
-    gameState.winner = null;
-    startNewRound();
-  };
-
-  // Render game
-  const render = () => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    
-    const ctx = canvas.getContext('2d');
-    
-    // Clear canvas with romantic background
-    ctx.fillStyle = '#ffeef8';
-    ctx.fillRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
-    
-    // Draw map obstacles
-    ctx.fillStyle = '#d63384';
-    MAP_OBSTACLES.forEach(obstacle => {
-      ctx.fillRect(obstacle.x, obstacle.y, obstacle.width, obstacle.height);
-    });
-    
-    // Draw players
-    Object.values(gameState.players).forEach(player => {
-      if (player.alive) {
-        // Player body
-        ctx.fillStyle = player.color;
-        ctx.beginPath();
-        ctx.arc(player.x, player.y, PLAYER_SIZE/2, 0, 2 * Math.PI);
-        ctx.fill();
-        
-        // Health bar
-        const healthBarWidth = 30;
-        const healthBarHeight = 4;
-        const healthPercent = player.health / PLAYER_MAX_HEALTH;
-        
-        ctx.fillStyle = '#ff0000';
-        ctx.fillRect(player.x - healthBarWidth/2, player.y - PLAYER_SIZE/2 - 10, healthBarWidth, healthBarHeight);
-        
-        ctx.fillStyle = '#00ff00';
-        ctx.fillRect(player.x - healthBarWidth/2, player.y - PLAYER_SIZE/2 - 10, healthBarWidth * healthPercent, healthBarHeight);
-      }
-    });
-    
-    // Draw bullets
-    gameState.bullets.forEach(bullet => {
-      ctx.fillStyle = bullet.color;
-      ctx.beginPath();
-      ctx.arc(bullet.x, bullet.y, BULLET_SIZE/2, 0, 2 * Math.PI);
-      ctx.fill();
-    });
-    
-    // Draw UI
-    ctx.fillStyle = '#333';
-    ctx.font = '20px Arial';
-    ctx.fillText(`Round ${gameState.currentRound}`, 20, 30);
-    ctx.fillText(`Player 1: ${gameState.players.player1.wins} wins`, 20, 60);
-    ctx.fillText(`Player 2: ${gameState.players.player2.wins} wins`, 20, 90);
-    
-    // Draw game state messages
-    if (gameState.gamePhase === 'ROUND_END') {
-      ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
-      ctx.fillRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
-      
-      ctx.fillStyle = '#fff';
-      ctx.font = '40px Arial';
-      ctx.textAlign = 'center';
-      const winner = gameState.players.player1.wins > gameState.players.player2.wins ? 'Player 1' : 'Player 2';
-      ctx.fillText(`${winner} Wins Round!`, CANVAS_WIDTH/2, CANVAS_HEIGHT/2);
-      ctx.font = '20px Arial';
-      ctx.fillText('Next round starting...', CANVAS_WIDTH/2, CANVAS_HEIGHT/2 + 40);
-      ctx.textAlign = 'left';
-    }
-    
-    if (gameState.gamePhase === 'GAME_END') {
-      ctx.fillStyle = 'rgba(0, 0, 0, 0.8)';
-      ctx.fillRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
-      
-      ctx.fillStyle = '#fff';
-      ctx.font = '50px Arial';
-      ctx.textAlign = 'center';
-      const gameWinner = gameState.winner === 'player1' ? 'Player 1' : 'Player 2';
-      ctx.fillText(`${gameWinner} Wins!`, CANVAS_WIDTH/2, CANVAS_HEIGHT/2);
-      ctx.font = '20px Arial';
-      ctx.fillText('Press R to play again', CANVAS_WIDTH/2, CANVAS_HEIGHT/2 + 40);
-      ctx.textAlign = 'left';
-    }
-  };
-
-  // Game loop
-  const gameLoop = useCallback(() => {
-    if (gameState.gamePhase === 'PLAYING') {
-      handleInput();
-      updateBullets();
-    }
-    render();
-    
-    // Update React state for UI
-    setGameStats({
-      player1Wins: gameState.players.player1.wins,
-      player2Wins: gameState.players.player2.wins,
-      currentRound: gameState.currentRound,
-      gamePhase: gameState.gamePhase
-    });
-    
-    animationRef.current = requestAnimationFrame(gameLoop);
-  }, []);
-
-  // Event listeners
+  // Keyboard controls
   useEffect(() => {
+    if (isMobile || gameState.screen !== 'playing') return;
+
+    const keys = {};
+    
     const handleKeyDown = (e) => {
       keys[e.key] = true;
       
-      // Shooting controls
-      if (e.key === ' ') { // Spacebar for Player 1
+      if (e.key === ' ') {
         e.preventDefault();
-        shootBullet(gameState.players.player1, mousePos.x, mousePos.y);
-      }
-      if (e.key === 'Enter') { // Enter for Player 2
-        e.preventDefault();
-        // Player 2 shoots towards Player 1
-        shootBullet(gameState.players.player2, gameState.players.player1.x, gameState.players.player1.y);
-      }
-      
-      // Reset game
-      if (e.key === 'r' || e.key === 'R') {
-        if (gameState.gamePhase === 'GAME_END') {
-          resetGame();
+        // Shoot towards mouse position or center of nearest enemy
+        const myPlayer = renderData.players.find(p => p.id === socketRef.current?.id);
+        if (myPlayer) {
+          const nearestEnemy = renderData.enemies.reduce((nearest, enemy) => {
+            if (!nearest) return enemy;
+            const distToNearest = Math.sqrt((myPlayer.x - nearest.x)**2 + (myPlayer.y - nearest.y)**2);
+            const distToEnemy = Math.sqrt((myPlayer.x - enemy.x)**2 + (myPlayer.y - enemy.y)**2);
+            return distToEnemy < distToNearest ? enemy : nearest;
+          }, null);
+          
+          if (nearestEnemy) {
+            shootBullet(nearestEnemy.x, nearestEnemy.y);
+          } else {
+            shootBullet(myPlayer.x + 100, myPlayer.y);
+          }
         }
       }
     };
@@ -347,86 +239,437 @@ function LoveRoyaleGame() {
       keys[e.key] = false;
     };
     
-    const handleMouseMove = (e) => {
-      const canvas = canvasRef.current;
-      if (canvas) {
-        const rect = canvas.getBoundingClientRect();
-        mousePos.x = e.clientX - rect.left;
-        mousePos.y = e.clientY - rect.top;
+    const gameLoop = () => {
+      let dx = 0, dy = 0;
+      
+      if (keys['w'] || keys['W'] || keys['ArrowUp']) dy = -1;
+      if (keys['s'] || keys['S'] || keys['ArrowDown']) dy = 1;
+      if (keys['a'] || keys['A'] || keys['ArrowLeft']) dx = -1;
+      if (keys['d'] || keys['D'] || keys['ArrowRight']) dx = 1;
+      
+      if (dx !== 0 || dy !== 0) {
+        movePlayer(dx, dy);
       }
-    };
-    
-    const handleMouseClick = (e) => {
-      if (gameState.gamePhase === 'PLAYING') {
-        shootBullet(gameState.players.player1, mousePos.x, mousePos.y);
-      }
+      
+      animationRef.current = requestAnimationFrame(gameLoop);
     };
     
     window.addEventListener('keydown', handleKeyDown);
     window.addEventListener('keyup', handleKeyUp);
     
-    const canvas = canvasRef.current;
-    if (canvas) {
-      canvas.addEventListener('mousemove', handleMouseMove);
-      canvas.addEventListener('click', handleMouseClick);
-    }
-    
-    // Start game loop
     animationRef.current = requestAnimationFrame(gameLoop);
     
     return () => {
       window.removeEventListener('keydown', handleKeyDown);
       window.removeEventListener('keyup', handleKeyUp);
-      if (canvas) {
-        canvas.removeEventListener('mousemove', handleMouseMove);
-        canvas.removeEventListener('click', handleMouseClick);
-      }
       if (animationRef.current) {
         cancelAnimationFrame(animationRef.current);
       }
     };
-  }, [gameLoop]);
+  }, [gameState.screen, renderData.players, renderData.enemies, movePlayer, shootBullet]);
+
+  // Mobile touch controls
+  const handleTouchStart = (e, type) => {
+    e.preventDefault();
+    const touch = e.touches[0];
+    const rect = e.currentTarget.getBoundingClientRect();
+    const x = touch.clientX - rect.left;
+    const y = touch.clientY - rect.top;
+
+    if (type === 'joystick') {
+      setMobileControls(prev => ({
+        ...prev,
+        joystick: {
+          active: true,
+          startX: x,
+          startY: y,
+          x: x,
+          y: y
+        }
+      }));
+    } else if (type === 'fire') {
+      setMobileControls(prev => ({
+        ...prev,
+        fireButton: { pressed: true }
+      }));
+      
+      // Auto-shoot at nearest enemy
+      const myPlayer = renderData.players.find(p => p.id === socketRef.current?.id);
+      if (myPlayer) {
+        const nearestEnemy = renderData.enemies.reduce((nearest, enemy) => {
+          if (!nearest) return enemy;
+          const distToNearest = Math.sqrt((myPlayer.x - nearest.x)**2 + (myPlayer.y - nearest.y)**2);
+          const distToEnemy = Math.sqrt((myPlayer.x - enemy.x)**2 + (myPlayer.y - enemy.y)**2);
+          return distToEnemy < distToNearest ? enemy : nearest;
+        }, null);
+        
+        if (nearestEnemy) {
+          shootBullet(nearestEnemy.x, nearestEnemy.y);
+        }
+      }
+    }
+  };
+
+  const handleTouchMove = (e, type) => {
+    e.preventDefault();
+    if (type === 'joystick' && mobileControls.joystick.active) {
+      const touch = e.touches[0];
+      const rect = e.currentTarget.getBoundingClientRect();
+      const x = touch.clientX - rect.left;
+      const y = touch.clientY - rect.top;
+
+      const dx = x - mobileControls.joystick.startX;
+      const dy = y - mobileControls.joystick.startY;
+      const distance = Math.sqrt(dx * dx + dy * dy);
+      const maxDistance = 50;
+
+      if (distance > 10) {
+        const normalizedDx = distance > maxDistance ? (dx / distance) * maxDistance : dx;
+        const normalizedDy = distance > maxDistance ? (dy / distance) * maxDistance : dy;
+        
+        movePlayer(normalizedDx / maxDistance, normalizedDy / maxDistance);
+      }
+
+      setMobileControls(prev => ({
+        ...prev,
+        joystick: { ...prev.joystick, x: x, y: y }
+      }));
+    }
+  };
+
+  const handleTouchEnd = (e, type) => {
+    e.preventDefault();
+    if (type === 'joystick') {
+      setMobileControls(prev => ({
+        ...prev,
+        joystick: { active: false, x: 0, y: 0, startX: 0, startY: 0 }
+      }));
+    } else if (type === 'fire') {
+      setMobileControls(prev => ({
+        ...prev,
+        fireButton: { pressed: false }
+      }));
+    }
+  };
+
+  // Render game
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas || gameState.screen !== 'playing') return;
+
+    const ctx = canvas.getContext('2d');
+    
+    const render = () => {
+      // Clear canvas
+      ctx.fillStyle = '#ffeef8';
+      ctx.fillRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
+      
+      // Draw map obstacles
+      if (gameState.mapConfig) {
+        ctx.fillStyle = '#d63384';
+        gameState.mapConfig.obstacles.forEach(obstacle => {
+          ctx.fillRect(obstacle.x, obstacle.y, obstacle.width, obstacle.height);
+        });
+      }
+      
+      // Draw players
+      renderData.players.forEach(player => {
+        if (player.alive) {
+          ctx.fillStyle = player.color;
+          ctx.beginPath();
+          ctx.arc(player.x, player.y, PLAYER_SIZE/2, 0, 2 * Math.PI);
+          ctx.fill();
+          
+          // Health bar
+          const healthPercent = player.health / player.max_health;
+          const barWidth = 30;
+          const barHeight = 4;
+          
+          ctx.fillStyle = '#ff0000';
+          ctx.fillRect(player.x - barWidth/2, player.y - PLAYER_SIZE/2 - 10, barWidth, barHeight);
+          
+          ctx.fillStyle = '#00ff00';
+          ctx.fillRect(player.x - barWidth/2, player.y - PLAYER_SIZE/2 - 10, barWidth * healthPercent, barHeight);
+          
+          // Player name
+          ctx.fillStyle = '#333';
+          ctx.font = '12px Arial';
+          ctx.textAlign = 'center';
+          ctx.fillText(player.name, player.x, player.y - PLAYER_SIZE/2 - 15);
+        }
+      });
+      
+      // Draw enemies
+      renderData.enemies.forEach(enemy => {
+        if (enemy.health > 0) {
+          ctx.fillStyle = enemy.color;
+          ctx.beginPath();
+          ctx.arc(enemy.x, enemy.y, enemy.size/2, 0, 2 * Math.PI);
+          ctx.fill();
+          
+          // Enemy health bar
+          const healthPercent = enemy.health / enemy.max_health;
+          const barWidth = 20;
+          const barHeight = 3;
+          
+          ctx.fillStyle = '#ff0000';
+          ctx.fillRect(enemy.x - barWidth/2, enemy.y - enemy.size/2 - 8, barWidth, barHeight);
+          
+          ctx.fillStyle = '#00ff00';
+          ctx.fillRect(enemy.x - barWidth/2, enemy.y - enemy.size/2 - 8, barWidth * healthPercent, barHeight);
+        }
+      });
+      
+      // Draw bullets
+      renderData.bullets.forEach(bullet => {
+        ctx.fillStyle = bullet.color;
+        ctx.beginPath();
+        ctx.arc(bullet.x, bullet.y, BULLET_SIZE/2, 0, 2 * Math.PI);
+        ctx.fill();
+      });
+      
+      requestAnimationFrame(render);
+    };
+    
+    render();
+  }, [gameState.screen, gameState.mapConfig, renderData]);
+
+  // UI Actions
+  const createRoom = () => {
+    if (!gameState.playerName.trim()) {
+      setGameState(prev => ({ ...prev, error: 'Please enter your name' }));
+      return;
+    }
+    
+    socketRef.current?.emit('create_room', {
+      player_name: gameState.playerName,
+      game_mode: 'coop_waves',
+      map_id: 'first_date_cafe'
+    });
+  };
+
+  const joinRoom = () => {
+    if (!gameState.playerName.trim() || !gameState.roomCode.trim()) {
+      setGameState(prev => ({ ...prev, error: 'Please enter your name and room code' }));
+      return;
+    }
+    
+    socketRef.current?.emit('join_room', {
+      room_code: gameState.roomCode,
+      player_name: gameState.playerName
+    });
+  };
+
+  const startGame = () => {
+    socketRef.current?.emit('start_game', {});
+  };
+
+  const leaveRoom = () => {
+    setGameState(prev => ({
+      ...prev,
+      screen: 'menu',
+      roomCode: '',
+      roomData: null,
+      mapConfig: null,
+      error: null
+    }));
+  };
+
+  // Render UI based on screen
+  const renderScreen = () => {
+    switch (gameState.screen) {
+      case 'menu':
+        return (
+          <div className="menu-screen">
+            <div className="menu-header">
+              <h1 className="game-title">💕 Love Royale 💕</h1>
+              <p className="game-subtitle">Multiplayer Romance Shooter</p>
+              {!gameState.connected && (
+                <div className="connection-status error">
+                  🔴 Connecting to server...
+                </div>
+              )}
+              {gameState.connected && (
+                <div className="connection-status success">
+                  🟢 Connected
+                </div>
+              )}
+            </div>
+            
+            <div className="menu-form">
+              <input
+                type="text"
+                placeholder="Your name"
+                value={gameState.playerName}
+                onChange={(e) => setGameState(prev => ({ ...prev, playerName: e.target.value }))}
+                className="name-input"
+              />
+              
+              <div className="menu-buttons">
+                <button 
+                  onClick={createRoom}
+                  disabled={!gameState.connected}
+                  className="create-room-btn"
+                >
+                  Create Room
+                </button>
+                
+                <div className="join-room-section">
+                  <input
+                    type="text"
+                    placeholder="Room Code"
+                    value={gameState.roomCode}
+                    onChange={(e) => setGameState(prev => ({ ...prev, roomCode: e.target.value.toUpperCase() }))}
+                    className="room-code-input"
+                    maxLength={4}
+                  />
+                  <button 
+                    onClick={joinRoom}
+                    disabled={!gameState.connected}
+                    className="join-room-btn"
+                  >
+                    Join Room
+                  </button>
+                </div>
+              </div>
+              
+              {gameState.error && (
+                <div className="error-message">{gameState.error}</div>
+              )}
+            </div>
+          </div>
+        );
+
+      case 'lobby':
+        return (
+          <div className="lobby-screen">
+            <div className="lobby-header">
+              <h2>Room: {gameState.roomCode}</h2>
+              <button onClick={leaveRoom} className="leave-btn">Leave Room</button>
+            </div>
+            
+            <div className="lobby-info">
+              <h3>Players ({gameState.roomData?.players?.length || 0}/2):</h3>
+              <ul className="player-list">
+                {gameState.roomData?.players?.map(player => (
+                  <li key={player.id} className="player-item">
+                    <span className="player-color" style={{ backgroundColor: player.color }}></span>
+                    {player.name}
+                    {player.id === gameState.roomData.host_id && <span className="host-badge">👑 Host</span>}
+                  </li>
+                ))}
+              </ul>
+            </div>
+            
+            <div className="game-mode-info">
+              <h3>🎮 Co-op vs AI Waves</h3>
+              <p>Work together to survive increasing waves of Love Zombies and Heartbreakers!</p>
+              <p>📍 Map: {gameState.mapConfig?.name}</p>
+            </div>
+            
+            {gameState.roomData?.host_id === socketRef.current?.id && (
+              <button 
+                onClick={startGame}
+                className="start-game-btn"
+                disabled={!gameState.roomData?.players?.length}
+              >
+                Start Game 💕
+              </button>
+            )}
+            
+            {gameState.roomData?.host_id !== socketRef.current?.id && (
+              <p className="waiting-message">Waiting for host to start the game...</p>
+            )}
+          </div>
+        );
+
+      case 'playing':
+        return (
+          <div className="game-screen">
+            <div className="game-hud">
+              <div className="hud-left">
+                <div className="wave-info">Wave {renderData.wave}</div>
+                <div className="enemies-count">Enemies: {renderData.enemies.length}</div>
+              </div>
+              <div className="hud-right">
+                <div className="players-info">
+                  {renderData.players.map(player => (
+                    <div key={player.id} className="player-hud">
+                      <span className="player-name">{player.name}</span>
+                      <div className="player-health">
+                        <div 
+                          className="health-bar" 
+                          style={{ width: `${(player.health / player.max_health) * 100}%` }}
+                        ></div>
+                      </div>
+                      <span className="player-score">Score: {player.score}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+            
+            <div className="canvas-container">
+              <canvas 
+                ref={canvasRef} 
+                width={CANVAS_WIDTH} 
+                height={CANVAS_HEIGHT}
+                className="game-canvas"
+              />
+              
+              {/* Mobile Controls */}
+              {isMobile && (
+                <div className="mobile-controls">
+                  <div 
+                    className="virtual-joystick"
+                    onTouchStart={(e) => handleTouchStart(e, 'joystick')}
+                    onTouchMove={(e) => handleTouchMove(e, 'joystick')}
+                    onTouchEnd={(e) => handleTouchEnd(e, 'joystick')}
+                  >
+                    <div className="joystick-base">
+                      <div 
+                        className="joystick-knob"
+                        style={{
+                          transform: mobileControls.joystick.active 
+                            ? `translate(${mobileControls.joystick.x - mobileControls.joystick.startX}px, ${mobileControls.joystick.y - mobileControls.joystick.startY}px)`
+                            : 'translate(0, 0)'
+                        }}
+                      ></div>
+                    </div>
+                  </div>
+                  
+                  <div 
+                    className={`fire-button ${mobileControls.fireButton.pressed ? 'pressed' : ''}`}
+                    onTouchStart={(e) => handleTouchStart(e, 'fire')}
+                    onTouchEnd={(e) => handleTouchEnd(e, 'fire')}
+                  >
+                    🔫
+                  </div>
+                </div>
+              )}
+            </div>
+            
+            <div className="game-controls-info">
+              {!isMobile && (
+                <p>Move: WASD/Arrow Keys | Shoot: Spacebar (auto-aims at nearest enemy)</p>
+              )}
+              {isMobile && (
+                <p>Use virtual joystick to move and fire button to shoot!</p>
+              )}
+            </div>
+          </div>
+        );
+
+      default:
+        return <div>Loading...</div>;
+    }
+  };
 
   return (
-    <div className="love-royale-game">
-      <div className="game-header">
-        <h1 className="game-title">💕 Love Royale 💕</h1>
-        <p className="game-subtitle">2-Player Tactical Romance Shooter</p>
-      </div>
-      
-      <div className="game-container">
-        <canvas 
-          ref={canvasRef} 
-          width={CANVAS_WIDTH} 
-          height={CANVAS_HEIGHT}
-          className="game-canvas"
-        />
-        
-        <div className="controls-info">
-          <div className="player-controls">
-            <h3>🌹 Player 1 (Pink)</h3>
-            <p>Move: WASD</p>
-            <p>Shoot: Mouse Click or Spacebar</p>
-            <p>Wins: {gameStats.player1Wins}</p>
-          </div>
-          
-          <div className="player-controls">
-            <h3>💖 Player 2 (Deep Pink)</h3>
-            <p>Move: Arrow Keys</p>
-            <p>Shoot: Enter Key</p>
-            <p>Wins: {gameStats.player2Wins}</p>
-          </div>
-        </div>
-      </div>
-      
-      <div className="game-info">
-        <p>First to {ROUNDS_TO_WIN} wins takes the heart! 💘</p>
-        {gameStats.gamePhase === 'GAME_END' && (
-          <p>Press 'R' to play again! 🔄</p>
-        )}
-      </div>
+    <div className="love-royale-app">
+      {renderScreen()}
     </div>
   );
 }
 
-export default LoveRoyaleGame;
+export default LoveRoyaleMultiplayer;
